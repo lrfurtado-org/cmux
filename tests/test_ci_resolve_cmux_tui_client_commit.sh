@@ -61,6 +61,21 @@ if [[ "$got" != "$C3" ]]; then
   exit 1
 fi
 
+# A URL template (a fork's GitHub release layout, cmux-tui-<commit>/manifest.json)
+# replaces the <base>/<commit>/manifest.json layout.
+TSTORE="$TMP/template-store"
+mkdir -p "$TSTORE/cmux-tui-$C3"
+printf '{"commit":"%s"}\n' "$C3" >"$TSTORE/cmux-tui-$C3/manifest.json"
+got="$(cd "$TMP/work" && CMUX_TUI_CLIENT_MANIFEST_URL_TEMPLATE="file://$TSTORE/cmux-tui-{commit}/manifest.json" "$RESOLVER")"
+if [[ "$got" != "$C3" ]]; then
+  echo "FAIL: a manifest URL template must resolve $C3 from the release layout, got '$got'"
+  exit 1
+fi
+if (cd "$TMP/work" && CMUX_TUI_CLIENT_MANIFEST_URL_TEMPLATE="file://$TSTORE/manifest.json" "$RESOLVER" >/dev/null 2>&1); then
+  echo "FAIL: a manifest URL template without {commit} must be rejected"
+  exit 1
+fi
+
 # The newest cmux-tui commit lost its artifacts (failed or still-running artifacts run).
 rm "$STORE/$C3/manifest.json"
 if (cd "$TMP/work" && "$RESOLVER" >/dev/null 2>&1); then

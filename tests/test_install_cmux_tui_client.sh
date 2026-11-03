@@ -184,6 +184,17 @@ grep -q "^gh attestation verify .*manifest.* --repo manaflow-ai/cmux --signer-wo
 [ "$(sed -n '2p' "$EVENTS" | cut -d' ' -f1-3)" = "gh attestation verify" ]
 [ "$(sed -n '3p' "$EVENTS")" = "curl https://files.example.test/cmux-tui/$COMMIT/cmux-tui-aarch64-apple-darwin" ]
 echo "PASS: attested manifest is verified before slices are downloaded"
+
+ANY_SOURCE_APP="$TEST_DIR/AnySource.app"
+install_remote "$ANY_SOURCE_APP" --expected-commit "$COMMIT" --attest-signer-workflow "$SIGNER" \
+  --attest-any-source-commit > "$TEST_DIR/any-source.log" 2>&1
+cmp "$CLIENT" "$ANY_SOURCE_APP/Contents/Resources/bin/cmux-tui"
+grep -q "^gh attestation verify .*manifest.* --repo manaflow-ai/cmux --signer-workflow $SIGNER\$" "$EVENTS"
+if grep -q -- '--source-digest' "$EVENTS"; then
+  echo "FAIL: --attest-any-source-commit still bound the attestation to a source commit" >&2
+  exit 1
+fi
+echo "PASS: --attest-any-source-commit keeps the signer check and drops only the source digest"
 # Manifest downloads are never resumed, while binary slices use range resumes
 # and inherit the total per-download deadline. A fast retry may receive less
 # than the full budget, but never exceeds it.
