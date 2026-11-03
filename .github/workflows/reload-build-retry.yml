@@ -8,8 +8,7 @@ name: reload-build retry
 # without running a single step. It never retries a real build failure.
 
 on:
-  schedule:
-    - cron: "*/20 * * * *"
+  # Manual only: dispatch it after a reload-build run sat unacquired.
   workflow_dispatch:
 
 permissions:

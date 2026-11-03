@@ -202,16 +202,41 @@ jobs:
         if: ${{ inputs.platform == 'macos' && hashFiles('cmux-tui/Cargo.toml') != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          # Fork-only. `releases` (default outside manaflow-ai/cmux) installs the
+          # client this repository publishes with fork-cmux-tui-release.yml;
+          # `upstream` installs manaflow-ai's files.cmux.com build instead.
+          CLIENT_SOURCE: ${{ vars.CMUX_TUI_CLIENT_SOURCE || (github.repository == 'manaflow-ai/cmux' && 'upstream' || 'releases') }}
         run: |
           set -euo pipefail
-          client_commit="$(scripts/ci/resolve-cmux-tui-client-commit.sh)"
+          install_args=()
+          case "$CLIENT_SOURCE" in
+            releases)
+              template="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/cmux-tui-{commit}/manifest.json"
+              signer="$GITHUB_REPOSITORY/.github/workflows/fork-cmux-tui-release.yml"
+              # The release run signs from its dispatch head, which can be newer
+              # than the client commit it builds; see the installer's header.
+              install_args+=(--attest-any-source-commit)
+              ;;
+            upstream)
+              # files.cmux.com is published only by manaflow-ai/cmux.
+              template="https://files.cmux.com/cmux-tui/{commit}/manifest.json"
+              signer="manaflow-ai/cmux/.github/workflows/cmux-tui-artifacts.yml"
+              ;;
+            *) echo "error: CMUX_TUI_CLIENT_SOURCE must be releases or upstream, not '$CLIENT_SOURCE'" >&2; exit 1 ;;
+          esac
+          if ! client_commit="$(CMUX_TUI_CLIENT_MANIFEST_URL_TEMPLATE="$template" scripts/ci/resolve-cmux-tui-client-commit.sh)"; then
+            if [[ "$CLIENT_SOURCE" == releases ]]; then
+              echo "::error::No cmux-tui release for this source's client inputs. Run the 'fork cmux-tui release' workflow on this ref first, then re-run this build."
+            fi
+            exit 1
+          fi
           git diff --exit-code "$client_commit" HEAD -- cmux-tui ghostty
           client_bundle="$RUNNER_TEMP/cmux-tui-prebuilt"
           mkdir -p "$client_bundle/Contents"
           env -u CMUX_TUI_CLIENT_LOCAL scripts/install-cmux-tui-client.sh "$client_bundle" \
-            --manifest-url "https://files.cmux.com/cmux-tui/$client_commit/manifest.json" \
+            --manifest-url "${template//'{commit}'/$client_commit}" \
             --expected-commit "$client_commit" --require-capability wireguard-hub \
-            --attest-signer-workflow "$GITHUB_REPOSITORY/.github/workflows/cmux-tui-artifacts.yml"
+            --attest-signer-workflow "$signer" ${install_args[@]+"${install_args[@]}"}
           client="$client_bundle/Contents/Resources/bin/cmux-tui"
           probe="$($client remote-probe --json)"
           version="$($client --version)"

@@ -1,0 +1,237 @@
+name: fork cmux-tui release
+
+# Fork-only. Builds the macOS cmux-tui client and publishes it as a GitHub
+# Release of this repository, in place of upstream's files.cmux.com upload
+# (cmux-tui-artifacts.yml, which needs manaflow-ai's R2 credentials).
+#
+# reload-build.yml installs the client from here: it resolves the newest commit
+# that touched the client inputs, then reads
+#   https://github.com/<repo>/releases/download/cmux-tui-<commit>/manifest.json
+# and requires a build-provenance attestation signed by THIS workflow in THIS
+# repository. Signing uses the run's GitHub OIDC identity: no keys or secrets.
+#
+# Run it manually (Actions > fork cmux-tui release > Run workflow) after a
+# sync that changes cmux-tui/ or ghostty, before dispatching reload-build.
+# A release that already exists is left as is unless `force` is set.
+#
+# The workflow file deliberately is NOT named cmux-tui-artifacts.yml: that path
+# is one of the resolver's client inputs, so editing it would make a new
+# client version that needs its own build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      macos_runner:
+        description: "macOS runner label for the two build legs"
+        required: false
+        default: "macos-15"
+        type: string
+      force:
+        description: "Rebuild and replace an existing release for the same commit"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: fork-cmux-tui-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  plan:
+    name: resolve client commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.resolve.outputs.commit }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      skip: ${{ steps.resolve.outputs.skip }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the newest commit that touched the client inputs
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          # Same input paths as scripts/ci/resolve-cmux-tui-client-commit.sh.
+          paths=(cmux-tui ghostty .github/workflows/cmux-tui-artifacts.yml .github/workflows/cmux-tui-build-package.yml)
+          commit="$(git log --full-history -1 --format=%H HEAD -- "${paths[@]}")"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "no commit touches ${paths[*]}" >&2; exit 1; }
+          tag="cmux-tui-$commit"
+          skip=false
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [[ "$FORCE" == "true" ]]; then
+              echo "release $tag exists; force set, rebuilding"
+            else
+              echo "release $tag already exists; nothing to do (set force to rebuild)"
+              skip=true
+            fi
+          fi
+          echo "client commit: $commit (run head $GITHUB_SHA)"
+          {
+            echo "commit=$commit"
+            echo "tag=$tag"
+            echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ${{ inputs.macos_runner || 'macos-15' }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+    steps:
+      # Build the resolved commit itself so the client's build identity is that
+      # commit, which reload-build checks with `remote-probe`.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
+          persist-credentials: false
+
+      - name: Init ghostty submodule
+        run: bash scripts/ci/init-submodule.sh ghostty
+
+      - name: Resolve Ghostty Zig version
+        id: zig
+        run: echo "version=$(bash ./scripts/ghostty-zig-version.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Install zig
+        uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # v2.0.5
+        with:
+          version: ${{ steps.zig.outputs.version }}
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build cmux-tui
+        working-directory: cmux-tui
+        env:
+          CMUX_TUI_DISTRIBUTION_VERSION: 0.0.0-fork.sha-${{ needs.plan.outputs.commit }}
+        run: |
+          set -euo pipefail
+          unset CMUX_GHOSTTY_SRC
+          CMUX_TUI_BUILD_COMMIT="$(git -C .. rev-parse HEAD)"
+          CMUX_TUI_GHOSTTY_COMMIT="$(git -C ../ghostty rev-parse HEAD)"
+          export CMUX_TUI_BUILD_COMMIT CMUX_TUI_GHOSTTY_COMMIT CMUX_TUI_DISTRIBUTION_VERSION
+          cargo build -p cmux-tui --bin cmux-tui --bin cmux-tui-hook --release --locked --target ${{ matrix.target }}
+
+      - name: Stage binaries
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "cmux-tui/target/${{ matrix.target }}/release/cmux-tui" "dist/cmux-tui-${{ matrix.target }}"
+          cp "cmux-tui/target/${{ matrix.target }}/release/cmux-tui-hook" "dist/cmux-tui-hook-${{ matrix.target }}"
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cmux-tui-${{ matrix.target }}
+          path: dist/cmux-tui-*
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: publish GitHub release
+    needs: [plan, build]
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the release
+      id-token: write # Sigstore signing identity for the attestation
+      attestations: write
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: cmux-tui-*
+          path: assets
+          merge-multiple: true
+
+      - name: Build manifest
+        env:
+          COMMIT: ${{ needs.plan.outputs.commit }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd assets
+          chmod 0755 cmux-tui-*
+          sha256sum cmux-tui-* > cmux-tui-checksums.txt
+          python3 - <<'PY'
+          import hashlib, json, os
+          from datetime import datetime, timezone
+
+          commit = os.environ["COMMIT"]
+          repo = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+          files = sorted(f for f in os.listdir(".") if f.startswith("cmux-tui-") and not f.endswith(".txt"))
+          for required in ("cmux-tui-aarch64-apple-darwin", "cmux-tui-x86_64-apple-darwin"):
+              if required not in files:
+                  raise SystemExit(f"missing {required}")
+          manifest = {
+              "commit": commit,
+              "builtAt": datetime.now(timezone.utc).isoformat(),
+              "sourceRepository": repo,
+              "sourceCommit": commit,
+              "attestationUrl": f"{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              "releaseUrl": f"{repo}/releases/tag/{os.environ['TAG']}",
+              "license": "MIT",
+              "runtimeByBinary": {
+                  f: {
+                      "os": "macos",
+                      "architecture": "arm64" if "aarch64" in f else "x86_64",
+                      "libc": "none",
+                  }
+                  for f in files
+              },
+              "binaries": {f: hashlib.sha256(open(f, "rb").read()).hexdigest() for f in files},
+          }
+          with open("manifest.json", "w") as out:
+              json.dump(manifest, out, indent=2)
+          print(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Attest manifest and binaries
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            assets/cmux-tui-*
+            assets/manifest.json
+          push-to-registry: false
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.plan.outputs.commit }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          files=(assets/cmux-tui-* assets/manifest.json)
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "${files[@]}" -R "$GITHUB_REPOSITORY" \
+              --target "$COMMIT" --prerelease \
+              --title "cmux-tui ${COMMIT:0:10}" \
+              --notes "macOS cmux-tui client built from $COMMIT by run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Consumed by reload-build.yml."
+          fi
+          echo "Published: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/manifest.json"

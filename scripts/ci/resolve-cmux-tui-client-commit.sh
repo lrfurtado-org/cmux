@@ -28,6 +28,8 @@
 #                       commit with HEAD's exact inputs must be published, or this fails.
 #   --head <rev>        history to search (default HEAD).
 # Env: CMUX_TUI_CLIENT_MANIFEST_BASE (default https://files.cmux.com/cmux-tui),
+#      CMUX_TUI_CLIENT_MANIFEST_URL_TEMPLATE (overrides the base; a manifest URL with
+#      {commit} in place of the commit, e.g. a fork's GitHub release download URL),
 #      CMUX_TUI_CLIENT_REMOTE (default origin; where a shallow clone deepens from),
 #      CMUX_TUI_CLIENT_FETCH_ATTEMPTS (default 5; tries per deepen before giving up),
 #      CMUX_TUI_CLIENT_FETCH_RETRY_SECONDS (default 2; first backoff, doubles per try),
@@ -38,12 +40,17 @@ set -euo pipefail
 
 PATHS=(cmux-tui ghostty .github/workflows/cmux-tui-artifacts.yml .github/workflows/cmux-tui-build-package.yml)
 BASE="${CMUX_TUI_CLIENT_MANIFEST_BASE:-https://files.cmux.com/cmux-tui}"
+URL_TEMPLATE="${CMUX_TUI_CLIENT_MANIFEST_URL_TEMPLATE:-}"
+if [[ -n "$URL_TEMPLATE" && "$URL_TEMPLATE" != *'{commit}'* ]]; then
+  echo "error: CMUX_TUI_CLIENT_MANIFEST_URL_TEMPLATE must contain {commit}" >&2
+  exit 64
+fi
 REMOTE="${CMUX_TUI_CLIENT_REMOTE:-origin}"
 MAX_FALLBACK=0
 HEAD_REV=HEAD
 
 log() { echo "resolve-cmux-tui-client-commit: $*" >&2; }
-usage() { sed -n '2,28p' "$0"; }
+usage() { sed -n '2,30p' "$0"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -246,7 +253,11 @@ for ((g = 0; g < ${#GROUP_KEYS[@]}; g++)); do
   # One probe per member: the first published member wins; a group with none moves on
   # to the next group (or fails exact mode).
   for sha in ${GROUP_MEMBERS[$g]}; do
-    url="$BASE/$sha/manifest.json"
+    if [[ -n "$URL_TEMPLATE" ]]; then
+      url="${URL_TEMPLATE//'{commit}'/$sha}"
+    else
+      url="$BASE/$sha/manifest.json"
+    fi
     if probe_manifest "$url"; then
       chosen="$sha"
       break
