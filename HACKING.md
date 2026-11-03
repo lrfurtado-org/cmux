@@ -5,20 +5,22 @@ DEV builds made in GitHub Actions, so you don't need a local Xcode setup.
 
 ## How the fork is set up
 
-The fork's `main` has only two workflows. The other upstream workflows were
+The fork's `main` has only three workflows. The other upstream workflows were
 deleted in commit `4d0d164149`.
 
 | Workflow | Purpose |
 | --- | --- |
 | `.github/workflows/reload-build.yml` | Builds a tagged DEV app (`cmux DEV <tag>`) from any ref and uploads it as an artifact. Runs only on demand (`workflow_dispatch`). |
 | `.github/workflows/resolve-dispatch-ref.yml` | Called by `reload-build.yml` to resolve the `ref` input to a commit. |
+| `.github/workflows/reload-build-retry.yml` | Fork-only. Reruns a `reload-build` whose macOS job never got a runner (see below). |
 
-Nothing runs on push, pull request or schedule. Neither workflow needs
-secrets. Because the repo owner isn't `manaflow-ai`, jobs run on GitHub-hosted
+Nothing runs on push or pull request. The only scheduled job is the retry
+check, which does nothing unless a build is waiting for a runner. None of
+them need secrets. Because the repo owner isn't `manaflow-ai`, jobs run on GitHub-hosted
 runners (`macos-26`, `ubuntu-24.04`).
 
 GitHub only lets you dispatch workflows that exist on the default branch.
-Keep these two files on `main`. Your feature branches don't need them.
+Keep these files on `main`. Your feature branches don't need them.
 
 ## Prerequisites
 
@@ -74,6 +76,28 @@ Keep these two files on `main`. Your feature branches don't need them.
 
    GitHub-hosted macOS runners can sit in the queue for a while. A cold build,
    with no SPM or DerivedData cache, takes much longer than a later one.
+
+### When no macOS runner is free
+
+Hosted `macos-26` runners are often at capacity. If no runner picks up the
+`build` job within about 15 minutes, GitHub cancels it with "The job was not
+acquired by Runner of type hosted even after multiple attempts". No workflow
+setting changes that wait. `timeout-minutes` only limits how long a job runs
+after it starts.
+
+`.github/workflows/reload-build-retry.yml` handles this. Every 20 minutes it
+looks at the latest `reload-build` run. If the build job was cancelled before
+running any step, it reruns the failed jobs, up to 40 attempts. It never
+retries a build that started and then failed. You can also run it by hand:
+
+```bash
+gh workflow run reload-build-retry.yml --repo lrfurtado/cmux --ref main
+# or rerun a run yourself:
+gh run rerun <run-id> --repo lrfurtado/cmux --failed
+```
+
+GitHub may delay scheduled runs, and it pauses schedules after 60 days with
+no repository activity.
 
 ## Download and run the app
 
@@ -137,8 +161,8 @@ git remote add upstream https://github.com/manaflow-ai/cmux.git   # once
 git switch main
 git fetch upstream
 git merge upstream/main
-# Remove every workflow upstream added or changed, except the two we keep.
-git ls-files .github/workflows | grep -vxE '\.github/workflows/(reload-build|resolve-dispatch-ref)\.yml' \
+# Remove every workflow upstream added or changed, except the ones we keep.
+git ls-files .github/workflows | grep -vxE '\.github/workflows/(reload-build|reload-build-retry|resolve-dispatch-ref)\.yml' \
   | xargs -r git rm -q
 git commit
 git push origin main
