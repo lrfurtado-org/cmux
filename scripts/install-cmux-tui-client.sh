@@ -13,12 +13,16 @@
 #     [--expected-commit <sha>] [--require-capability <name>]...
 #     [--arch <native|arm64|x86_64|universal>]
 #     [--attest-signer-workflow <owner/repo/.github/workflows/name.yml>] [--allow-unattested]
+#     [--attest-any-source-commit]
 #
 # Every remote install authenticates the downloaded manifest before any value in it is
 # trusted: `gh attestation verify` must find a Sigstore build-provenance attestation for
 # the manifest bytes, signed by the publishing workflow in its repository (default
 # manaflow-ai/cmux/.github/workflows/cmux-tui-artifacts.yml; override with
 # --attest-signer-workflow) and, with --expected-commit, built from that source commit.
+# --attest-any-source-commit drops only that last source-commit binding, for a signer
+# that builds a resolved commit from a later dispatch head (a fork's release workflow);
+# the signer and the manifest's own commit are still checked.
 # The manifest's sha256 pins then cover the binaries, so an artifact host cannot
 # substitute a build. Only --allow-unattested skips this, for local development on a
 # machine without an authenticated gh; CI never passes it. A CMUX_TUI_CLIENT_LOCAL
@@ -33,7 +37,7 @@
 # and still checked with remote-probe and any required capabilities.
 set -euo pipefail
 
-usage() { sed -n '2,22p' "$0"; }
+usage() { sed -n '2,26p' "$0"; }
 
 APP_PATH=""
 MANIFEST_URL="${CMUX_TUI_CLIENT_MANIFEST_URL:-https://files.cmux.com/cmux-tui/latest/manifest.json}"
@@ -42,6 +46,7 @@ EXPECTED_COMMIT=""
 ARCH="universal"
 ATTEST_SIGNER_WORKFLOW="manaflow-ai/cmux/.github/workflows/cmux-tui-artifacts.yml"
 ALLOW_UNATTESTED=0
+ATTEST_ANY_SOURCE_COMMIT=0
 REQUIRED_CAPABILITIES=()
 while (( $# )); do
   case "$1" in
@@ -51,6 +56,7 @@ while (( $# )); do
     --expected-commit) shift; EXPECTED_COMMIT="${1:?--expected-commit needs a value}" ;;
     --attest-signer-workflow) shift; ATTEST_SIGNER_WORKFLOW="${1:?--attest-signer-workflow needs a value}" ;;
     --allow-unattested) ALLOW_UNATTESTED=1 ;;
+    --attest-any-source-commit) ATTEST_ANY_SOURCE_COMMIT=1 ;;
     --require-capability) shift; REQUIRED_CAPABILITIES+=("${1:?--require-capability needs a value}") ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "unknown option: $1" >&2; usage >&2; exit 64 ;;
@@ -95,7 +101,9 @@ verify_manifest_attestation() {
     echo "error: verifying the cmux-tui manifest attestation needs the GitHub CLI (gh); pass --allow-unattested only for local development" >&2
     exit 1
   }
-  [[ -n "$EXPECTED_COMMIT" ]] && args+=(--source-digest "$EXPECTED_COMMIT")
+  if [[ -n "$EXPECTED_COMMIT" ]] && (( ! ATTEST_ANY_SOURCE_COMMIT )); then
+    args+=(--source-digest "$EXPECTED_COMMIT")
+  fi
   # An exhausted GitHub API quota says nothing about the attestation, and
   # failing on it discards a signed nightly leg (run 37526635018). Retry only
   # that answer, with backoff (1, 2, 4, 8 minutes by default); any other
