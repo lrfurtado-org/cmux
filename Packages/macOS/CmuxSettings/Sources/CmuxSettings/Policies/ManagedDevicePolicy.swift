@@ -18,6 +18,10 @@ import Foundation
 /// To let one profile govern every channel, the resolver also consults the
 /// release domain when the app's own domain does not force the key.
 ///
+/// In DEV builds a developer can opt out of every profile-forced value with
+/// ``ManagedDevicePolicyBypass`` (`--ignore-managed-policy` or
+/// `app.ignoreManagedPolicy` in `cmux.json`). Shipped channels never honor it.
+///
 /// ```swift
 /// let policy = ManagedDevicePolicy()
 /// if policy.isEnforced(.disableEmbeddedBrowser) { /* refuse to create a pane */ }
@@ -45,6 +49,7 @@ public struct ManagedDevicePolicy: Sendable {
     nonisolated(unsafe) private let defaults: UserDefaults
     nonisolated(unsafe) private let releaseDomainDefaults: UserDefaults?
     private let forcedObject: ForcedObjectProbe
+    private let ignoresForcedValues: Bool
 
     /// Creates a resolver.
     ///
@@ -58,16 +63,22 @@ public struct ManagedDevicePolicy: Sendable {
     ///     the fallback.
     ///   - forcedObject: Probe answering whether a profile forces a key in a
     ///     given domain. Tests inject a deterministic probe.
+    ///   - ignoresForcedValues: When `true`, every policy query answers as if
+    ///     no profile were installed. Defaults to the process-wide
+    ///     ``ManagedDevicePolicyBypass/current``, which is only ever active
+    ///     in DEV builds.
     public init(
         defaults: UserDefaults = .standard,
         releaseDomainDefaults: UserDefaults? = ManagedDevicePolicy.defaultReleaseDomainDefaults(),
         forcedObject: @escaping ForcedObjectProbe = { defaults, key in
             defaults.objectIsForced(forKey: key) ? defaults.object(forKey: key) : nil
-        }
+        },
+        ignoresForcedValues: Bool = ManagedDevicePolicyBypass.current.isActive
     ) {
         self.defaults = defaults
         self.releaseDomainDefaults = releaseDomainDefaults
         self.forcedObject = forcedObject
+        self.ignoresForcedValues = ignoresForcedValues
     }
 
     /// The release-domain fallback suite for the running process, or `nil`
@@ -132,6 +143,9 @@ public struct ManagedDevicePolicy: Sendable {
     public func forcedValue(
         forUserDefaultsKey userDefaultsKey: String
     ) -> (object: Any, source: ManagedDevicePolicyValueSource)? {
+        if ignoresForcedValues {
+            return nil
+        }
         if let value = forcedObject(defaults, userDefaultsKey) {
             return (value, .appDomain)
         }
@@ -217,6 +231,10 @@ public struct ManagedDevicePolicy: Sendable {
     /// best a no-op and at worst a write loop. The release fallback domain
     /// is not consulted — it never conflicts with writes to the app's own
     /// domain.
+    ///
+    /// ``ManagedDevicePolicyBypass`` does not change this answer: the OS
+    /// still returns a forced value from the app's own domain whatever cmux
+    /// decides, so writes under it stay suppressed.
     public func isKeyForcedInAppDomain(_ userDefaultsKey: String) -> Bool {
         forcedObject(defaults, userDefaultsKey) != nil
     }

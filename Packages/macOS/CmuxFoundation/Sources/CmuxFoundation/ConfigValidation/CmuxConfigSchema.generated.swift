@@ -767,6 +767,11 @@ enum CmuxEmbeddedConfigSchema {
           "descriptionKey": "schemaDescriptions.app.devWindowDisplay",
           "description": "DEBUG-only display name used when opening new windows. An empty value uses the system default."
         },
+        "ignoreManagedPolicy": {
+          "type": "boolean",
+          "default": false,
+          "description": "DEV-build-only: ignore MDM configuration-profile policies, like launching with --ignore-managed-policy. Stable, nightly, rc, and staging builds ignore this key. Read at launch."
+        },
         "menuBarOnly": {
           "type": "boolean",
           "default": false,

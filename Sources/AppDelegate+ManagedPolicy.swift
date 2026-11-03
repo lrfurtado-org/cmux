@@ -2,6 +2,9 @@ import CmuxCloud
 import AppKit
 import CmuxSettings
 import Foundation
+import os
+
+nonisolated private let managedPolicyLogger = Logger(subsystem: "com.cmuxterm.app", category: "ManagedPolicy")
 
 /// Runtime enforcement for MDM managed policies (`DisableEmbeddedBrowser`,
 /// `DisableRemoteControl`, `DisableCloud`, and `DisableRemoteConnections`):
@@ -11,6 +14,9 @@ extension AppDelegate {
     /// Installs the managed-policy transition observer once at startup.
     func installManagedPolicyEnforcement() {
         guard managedPolicyEnforcementObserver == nil else { return }
+        if let source = ManagedDevicePolicyBypass.current.source {
+            managedPolicyLogger.warning("Ignoring MDM managed policies in this DEV build (source: \(source.rawValue, privacy: .public))")
+        }
         managedPolicyEnforcementObserver = ManagedPolicyEnforcementObserver(
             socketControlPolicy: {
                 CmuxSettingsFileStore.socketControlPolicyResolution()

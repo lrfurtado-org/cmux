@@ -24,6 +24,25 @@ channel. A profile may additionally target a channel's own domain (for
 example `com.cmuxterm.app.nightly`); a value forced in the app's own
 domain wins over the release-domain fallback.
 
+### DEV-build opt-out for cmux developers
+
+A cmux developer on an MDM-enrolled Mac can make a DEV build ignore every
+profile-forced policy, either by launching with `--ignore-managed-policy`
+or by setting this in `~/.config/cmux/cmux.json`:
+
+```json
+{ "app": { "ignoreManagedPolicy": true } }
+```
+
+Only DEV bundle identifiers (`com.cmuxterm.app.debug` and tagged
+`com.cmuxterm.app.debug.<tag>` builds) honor it. Stable, nightly, rc, and
+staging builds ignore both the flag and the key, so this is not a way
+around an administrator's policy in a shipped app. The app resolves it once
+at launch and logs a `ManagedPolicy` warning while it is active. The bundled
+`cmux` CLI process always enforces its own local checks (for example
+`cmux vm push`/`pull` under `DisableFileTransfer`), because a standalone
+executable has no trustworthy DEV identity.
+
 ## Policy keys
 
 | Key | Type | Default | Behavior when forced to `true` |

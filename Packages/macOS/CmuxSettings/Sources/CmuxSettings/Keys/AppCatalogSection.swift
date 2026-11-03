@@ -421,5 +421,17 @@ public struct AppCatalogSection: SettingCatalogSection {
         defaultValue: ""
     )
 
+    /// DEV-only opt-out of MDM configuration-profile policies, equivalent to
+    /// launching with `--ignore-managed-policy`. See
+    /// ``ManagedDevicePolicyBypass``. Stable, nightly, rc, and staging builds
+    /// ignore it. Read once at launch.
+    ///
+    /// JSON-backed so one value applies to every tagged dev build, like
+    /// ``devWindowDisplay``.
+    public let ignoreManagedPolicy = JSONKey<Bool>(
+        id: "app.ignoreManagedPolicy",
+        defaultValue: false
+    )
+
     public init() {}
 }
