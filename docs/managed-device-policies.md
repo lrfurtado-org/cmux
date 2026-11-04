@@ -24,6 +24,16 @@ channel. A profile may additionally target a channel's own domain (for
 example `com.cmuxterm.app.nightly`); a value forced in the app's own
 domain wins over the release-domain fallback.
 
+A channel build stops reading `com.cmuxterm.app` when its own domain sets
+`CmuxIgnoreReleaseDomainManagedPolicy` to `true`:
+
+```bash
+defaults write com.cmuxterm.app.debug.<tag> CmuxIgnoreReleaseDomainManagedPolicy -bool true
+```
+
+It is off by default and the release app ignores it. To keep a channel
+build governed, target its own domain, or force this key to `false` there.
+
 ## Policy keys
 
 | Key | Type | Default | Behavior when forced to `true` |

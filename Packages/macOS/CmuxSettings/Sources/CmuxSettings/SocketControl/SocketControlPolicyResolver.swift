@@ -35,7 +35,8 @@ public struct SocketControlPolicyResolver: Sendable {
         self.managedPolicy = managedPolicy ?? ManagedDevicePolicy(
             defaults: defaults,
             releaseDomainDefaults: ManagedDevicePolicy.defaultReleaseDomainDefaults(
-                bundleIdentifier: bundleIdentifier
+                bundleIdentifier: bundleIdentifier,
+                appDefaults: defaults
             )
         )
     }
