@@ -44,6 +44,10 @@ on:
         required: false
         default: remote
         type: string
+      publish_release:
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       tag:
@@ -90,6 +94,11 @@ on:
         options:
           - remote
           - local
+      publish_release:
+        description: "Fork: attach the built macOS app (zip) to a GitHub prerelease cmux-dev-<tag>-<commit>"
+        required: false
+        default: true
+        type: boolean
 
 # Surface tag/platform/nonce in the run title so the dispatcher can match its run
 # by the nonce it passed (gh workflow run does not return a run id).
@@ -1043,3 +1052,77 @@ jobs:
           path: artifact/
           retention-days: 1
           if-no-files-found: error
+
+  # Fork-only. The build artifact above expires after a day; this keeps the
+  # macOS GUI app as a downloadable GitHub prerelease next to the cmux-tui
+  # client releases (fork-cmux-tui-release.yml). The app is ad-hoc signed and
+  # not notarized, so macOS quarantines a browser download (see the notes).
+  publish-app:
+    name: publish macOS app release
+    needs: [resolve-ref, build]
+    if: ${{ inputs.platform == 'macos' && inputs.publish_release && github.repository != 'manaflow-ai/cmux' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the release
+      id-token: write # Sigstore signing identity for the attestation
+      attestations: write
+    steps:
+      - name: Download app artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: reload-${{ inputs.tag }}-macos
+          path: artifact
+
+      - name: Name the app zip
+        id: asset
+        env:
+          BUILD_TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ needs.resolve-ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ -f artifact/app.zip ]] || { echo "artifact has no app.zip" >&2; exit 1; }
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "unresolved source sha: '$SOURCE_SHA'" >&2; exit 1; }
+          safe_tag="$(printf '%s' "$BUILD_TAG" | tr -c 'A-Za-z0-9._-' '-')"
+          short="${SOURCE_SHA:0:10}"
+          zip="cmux-DEV-${safe_tag}-${short}-macos.zip"
+          mkdir -p release
+          mv artifact/app.zip "release/$zip"
+          ( cd release && sha256sum "$zip" > "$zip.sha256" )
+          {
+            echo "zip=$zip"
+            echo "release_tag=cmux-dev-${safe_tag}-${short}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest the app zip
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: release/${{ steps.asset.outputs.zip }}
+          push-to-registry: false
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ needs.resolve-ref.outputs.sha }}
+          ZIP: ${{ steps.asset.outputs.zip }}
+          RELEASE_TAG: ${{ steps.asset.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          files=("release/$ZIP" "release/$ZIP.sha256")
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          notes="cmux DEV ${BUILD_TAG} (macOS GUI app) built from ${SOURCE_SHA} by ${run_url}.
+
+          Ad-hoc signed, not notarized. After unzipping a browser download, clear the quarantine flag:
+              xattr -dr com.apple.quarantine \"cmux DEV ${BUILD_TAG}.app\"
+          Or download with: gh release download ${RELEASE_TAG} -R ${GITHUB_REPOSITORY}
+          Verify: gh attestation verify ${ZIP} --repo ${GITHUB_REPOSITORY}"
+          if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" -R "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" --prerelease \
+              --title "cmux DEV ${BUILD_TAG} (${SOURCE_SHA:0:10})" \
+              --notes "$notes"
+          fi
+          echo "Published: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG" | tee -a "$GITHUB_STEP_SUMMARY"
