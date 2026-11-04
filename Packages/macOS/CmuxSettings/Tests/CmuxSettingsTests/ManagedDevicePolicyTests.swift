@@ -183,6 +183,36 @@ struct ManagedDevicePolicyTests {
         ) != nil)
     }
 
+    @Test func channelBuildCanOptOutOfReleaseDomainFallback() throws {
+        let (appDefaults, cleanup) = try makeSuite("releaseDomainOptOut")
+        defer { cleanup() }
+        let key = ManagedDevicePolicy.ignoreReleaseDomainPolicyKey
+
+        // Off by default: a channel build reads the release domain.
+        #expect(ManagedDevicePolicy.defaultReleaseDomainDefaults(
+            bundleIdentifier: "com.cmuxterm.app.debug.fork-main",
+            appDefaults: appDefaults
+        ) != nil)
+
+        appDefaults.set(true, forKey: key)
+        #expect(ManagedDevicePolicy.defaultReleaseDomainDefaults(
+            bundleIdentifier: "com.cmuxterm.app.debug.fork-main",
+            appDefaults: appDefaults
+        ) == nil)
+
+        // The release build never has a fallback, opt-out or not.
+        #expect(ManagedDevicePolicy.defaultReleaseDomainDefaults(
+            bundleIdentifier: ManagedDevicePolicy.releasePayloadDomain,
+            appDefaults: appDefaults
+        ) == nil)
+
+        appDefaults.set(false, forKey: key)
+        #expect(ManagedDevicePolicy.defaultReleaseDomainDefaults(
+            bundleIdentifier: "com.cmuxterm.app.debug.fork-main",
+            appDefaults: appDefaults
+        ) != nil)
+    }
+
     @Test func documentedPolicyKeyNamesAreStable() {
         // These strings are the administrator-facing contract documented in
         // docs/managed-device-policies.md; renaming them breaks deployed

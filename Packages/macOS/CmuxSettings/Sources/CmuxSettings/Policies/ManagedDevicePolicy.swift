@@ -18,6 +18,11 @@ import Foundation
 /// To let one profile govern every channel, the resolver also consults the
 /// release domain when the app's own domain does not force the key.
 ///
+/// A channel build can opt out of that fallback by setting
+/// ``ignoreReleaseDomainPolicyKey`` to `true` in its own domain. The release
+/// build ignores the opt-out, and a profile that targets the channel build's
+/// own domain (including one forcing the opt-out key to `false`) still wins.
+///
 /// ```swift
 /// let policy = ManagedDevicePolicy()
 /// if policy.isEnforced(.disableEmbeddedBrowser) { /* refuse to create a pane */ }
@@ -74,14 +79,24 @@ public struct ManagedDevicePolicy: Sendable {
     /// when the process already runs under the release bundle identifier
     /// (its own domain is the payload domain, so no fallback is needed).
     ///
-    /// - Parameter bundleIdentifier: The running app's bundle identifier.
-    ///   Defaults to `Bundle.main.bundleIdentifier`.
+    /// - Parameters:
+    ///   - bundleIdentifier: The running app's bundle identifier. Defaults to
+    ///     `Bundle.main.bundleIdentifier`.
+    ///   - appDefaults: The channel build's own domain, read for
+    ///     ``ignoreReleaseDomainPolicyKey``. Defaults to `UserDefaults.standard`.
     public static func defaultReleaseDomainDefaults(
-        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier,
+        appDefaults: UserDefaults = .standard
     ) -> UserDefaults? {
         guard bundleIdentifier != releasePayloadDomain else { return nil }
+        guard !appDefaults.bool(forKey: ignoreReleaseDomainPolicyKey) else { return nil }
         return UserDefaults(suiteName: releasePayloadDomain)
     }
+
+    /// Channel-build opt-out from the release-domain fallback. Off unless the
+    /// channel build's own domain sets it to `true`, for example
+    /// `defaults write <channel bundle id> CmuxIgnoreReleaseDomainManagedPolicy -bool true`.
+    public static let ignoreReleaseDomainPolicyKey = "CmuxIgnoreReleaseDomainManagedPolicy"
 
     /// Whether a configuration profile currently enforces `key` (forces it
     /// to `true`) in the app's own domain or the release fallback domain.
